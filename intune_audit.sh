@@ -22,34 +22,34 @@ DEVICE_ID="$(echo "$device_response" | jq -r '.value[].id')"
 DEVICE_NAME=$(echo "$device_response" | jq -r '.value[0].deviceName') 
 SYNC_TIME="$(echo "$device_response" | jq -r '.value[].lastSyncDateTime')"
 
-#Requesting summaries for all Intune compliance settings and extracting each compliance-setting summary ID.
-summary_response=$(curl -s "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries" \
-  -H "Authorization: Bearer $ACCESS_TOKEN")
-SUMMARY_IDS="$(echo "$summary_response" | jq -r '.value[].id')"
-
-#Read one compliance-setting summary ID at a time
-#LOOPING THROUGH COMPLIANCE SUMMARY_IDS with DEVICE_ID as the filter
-counter=0
-ncounter=0
 
 printf "\nINTUNE COMPLIANCE AUDITOR\n"
-printf "==========================\n\n"
+printf "~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n"
 
 printf "Device: %s\n\n" "$DEVICE_NAME"
 
 printf "%-45s %-15s\n" "SETTING" "STATE"
-printf "%-45s %-15s\n" "---------------------------------------------" "---------------"
+printf "%-45s %-15s\n" "---------------------------------------------" "---------"
 
 
+
+all_devices=$(echo "$device_response" | jq -r '.value[] | [.id,.deviceName,.lastSyncDateTime] | @tsv')
+while IFS=$'\t' read -r device_id device_name last_sync
+do
+#Requesting summaries for all Intune compliance settings and extracting each compliance-setting summary ID.
+summary_response=$(curl -s "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries" \
+  -H "Authorization: Bearer $ACCESS_TOKEN")
+SUMMARY_IDS="$(echo "$summary_response" | jq -r '.value[].id')"
+counter=0
+ncounter=0
 while read -r summary_id;do	
 	setting_response=$(curl -s "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries/$summary_id/deviceComplianceSettingStates" \
 	-H "Authorization: Bearer $ACCESS_TOKEN") 
- 	result=$(echo "$setting_response" | jq -r --arg DEVICE_ID "$DEVICE_ID" '.value[]| select(.deviceId == $DEVICE_ID)| [(.settingName | split(".") | last),.state]| @tsv')
+ 	result=$(echo "$setting_response" | jq -r --arg DEVICE_ID "$device_id" '.value[]| select(.deviceId == $DEVICE_ID)| [(.settingName | split(".") | last),.state]| @tsv')
 if [[ -n "$result" ]];then
 	IFS=$'\t' read -r setting state <<< "$result"
     	printf "%-45s %-15s\n" "$setting" "$state"
 fi
-
 
 #Increasing counter after Compliance Check
 if [[ "$state" == "compliant" ]]; then
@@ -58,7 +58,6 @@ if [[ "$state" == "compliant" ]]; then
         elif [[ "$state" == "nonCompliant" ]]; then
             ((ncounter++))
 fi
-done <<< "$SUMMARY_IDS"
 
 total=$((counter+ncounter))
 if ((total > 0)); then
@@ -82,6 +81,10 @@ if (( days_since_sync >= 30 )); then
 else
     device_status="ACTIVE"
 fi
+
+
+done <<< "$SUMMARY_IDS"
+done <<< "$all_devices"
 
 
 
