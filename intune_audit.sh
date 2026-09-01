@@ -18,22 +18,10 @@ ACCESS_TOKEN=$(echo "$OAuth_response" | jq -r .access_token) #Gives raw string b
 #Requesting Intune device details from Microsoft Graph and extracting the managed DEVICE ID
 device_response=$(curl -s -X GET "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices" \
 	-H "Authorization: Bearer $ACCESS_TOKEN")
-DEVICE_ID="$(echo "$device_response" | jq -r '.value[].id')"
-DEVICE_NAME=$(echo "$device_response" | jq -r '.value[0].deviceName') 
-SYNC_TIME="$(echo "$device_response" | jq -r '.value[].lastSyncDateTime')"
-
-
+all_devices=$(echo "$device_response" | jq -r '.value[] | [.id,.deviceName,.lastSyncDateTime] | @tsv')
 printf "\nINTUNE COMPLIANCE AUDITOR\n"
 printf "~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n"
 
-printf "Device: %s\n\n" "$DEVICE_NAME"
-
-printf "%-45s %-15s\n" "SETTING" "STATE"
-printf "%-45s %-15s\n" "---------------------------------------------" "---------"
-
-
-
-all_devices=$(echo "$device_response" | jq -r '.value[] | [.id,.deviceName,.lastSyncDateTime] | @tsv')
 while IFS=$'\t' read -r device_id device_name last_sync
 do
 #Requesting summaries for all Intune compliance settings and extracting each compliance-setting summary ID.
@@ -42,13 +30,19 @@ summary_response=$(curl -s "https://graph.microsoft.com/v1.0/deviceManagement/de
 SUMMARY_IDS="$(echo "$summary_response" | jq -r '.value[].id')"
 counter=0
 ncounter=0
+
+printf "Device: %s\n\n" "$device_name"
+
+printf "%-45s %-15s\n" "SETTINGS" "STATE"
+printf "%-45s %-15s\n" "---------------------------------------------" "---------"
+
 while read -r summary_id;do	
 	setting_response=$(curl -s "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries/$summary_id/deviceComplianceSettingStates" \
 	-H "Authorization: Bearer $ACCESS_TOKEN") 
- 	result=$(echo "$setting_response" | jq -r --arg DEVICE_ID "$device_id" '.value[]| select(.deviceId == $DEVICE_ID)| [(.settingName | split(".") | last),.state]| @tsv')
+ 	result=$(echo "$setting_response" | jq -r --arg jq_device_id "$device_id" '.value[]| select(.deviceId == $jq_device_id)| [(.settingName | split(".") | last),.state]| @tsv')
 if [[ -n "$result" ]];then
-	IFS=$'\t' read -r setting state <<< "$result"
-    	printf "%-45s %-15s\n" "$setting" "$state"
+	IFS=$'\t' read -r settings state <<< "$result"
+    	printf "%-45s %-15s\n" "$settings" "$state"
 fi
 
 #Increasing counter after Compliance Check
@@ -59,6 +53,8 @@ if [[ "$state" == "compliant" ]]; then
             ((ncounter++))
 fi
 
+done <<< "$SUMMARY_IDS"
+
 total=$((counter+ncounter))
 if ((total > 0)); then
 	comp_percentage=$(awk -v c="$counter" -v t="$total" \
@@ -68,7 +64,7 @@ else
 fi
 
 
-epoch=$(date -d "$SYNC_TIME" +%s)
+epoch=$(date -d "$last_sync" +%s)
 current_epoch_time=$(date +%s)
 
 
@@ -83,19 +79,15 @@ else
 fi
 
 
-done <<< "$SUMMARY_IDS"
-done <<< "$all_devices"
-
-
-
 printf "\nSUMMARY\n"
 printf "=======\n"
 
-printf "Compliant settings:      %d\n" "$counter"
-printf "Non-compliant settings:  %d\n" "$ncounter"
-printf "Compliance percentage:   %s%%\n" "$comp_percentage"
+printf "Compliant settings:     %d\n" "$counter"
+printf "Non-compliant settings: %d\n" "$ncounter"
+printf "Compliance percentage:  %s%%\n" "$comp_percentage"
 
 printf "Last sync: %d hours ago (%d days)\n" \
     "$hours_since_sync" "$days_since_sync"
-printf "Device status:           %s\n" "$device_status"
-
+printf "Device status:          %s\n" "$device_status"
+printf "\n============================================================\n\n"
+done <<< "$all_devices"
