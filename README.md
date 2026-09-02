@@ -24,7 +24,7 @@ The project is a hands-on lab using Bash Scripting, Microsoft Intune, Entra ID, 
 ## Architecture
 
 Project's Flowchart:
-
+```
 Bash Script
   |
   v
@@ -49,16 +49,16 @@ jq for JSON Processing
   +---> Terminal Display
   |
   +---> CSV Report
-
+```
 
 ## Requirements
 
-Bash
-Virtual Machines (QEMU/KVM)
-curl
-jq
-Access to Microsoft Entra tenant.
-Intune Licensing (30 day free trial)
+Bash,
+Virtual Machines (QEMU/KVM),
+curl,
+jq,
+Access to Microsoft Entra tenant,
+Intune Licensing (30 day free trial),
 App registration with Microsoft Graph permissions.
 
 ## Microsoft Graph Permissions
