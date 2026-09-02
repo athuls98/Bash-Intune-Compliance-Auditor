@@ -4,6 +4,9 @@
 #Load tenant ID, client ID, and client secret from the config file
 source ~/.config/intune-auditor/config.env
 
+csv_file="Intune_Compliance_Report.csv"
+printf '"Device","CompliancePercentage","CompliantSettings","NonCompliantSettings","LastSyncHours","DeviceStatus"\n' > "$csv_file"
+
 #Requesting an Oauth2.0 Access Token from Entra ID
 OAuth_response=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT_ID/oauth2/v2.0/token" \
 	-d "client_id=$CLIENT_ID"\
@@ -11,49 +14,86 @@ OAuth_response=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT_ID/o
         -d "scope=https://graph.microsoft.com/.default"\
 	-d "grant_type=client_credentials")
 
+
 #Extracting only the access token from the OAuth Response
 ACCESS_TOKEN=$(echo "$OAuth_response" | jq -r .access_token) #Gives raw string by removing the quotes
+if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+    echo "Error: Failed to obtain access token from Microsoft Graph."
+    exit 1
+fi
 
 
-#Requesting Intune device details from Microsoft Graph and extracting the managed DEVICE ID
-device_response=$(curl -s -X GET "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices" \
-	-H "Authorization: Bearer $ACCESS_TOKEN")
+
+#API/ERROR HANDLING
+graph_get() 
+{
+	local url="$1"
+	local file_name="$2"
+	local http_code
+
+	http_code=$(curl -s -w "%{http_code}" -o "$file_name" \
+    			-H "Authorization: Bearer $ACCESS_TOKEN" \
+			"$url")
+
+	local curl_status=$?
+
+	#Check for Network Error
+	if [[ $curl_status != 0 ]];then
+		echo "Error: Unable to reach Microsoft Graph"
+		return 1
+	fi
+
+	#Check for API/Authorization error
+	if [[ "$http_code" != "200" ]]; then
+    	echo "Error: Microsoft Graph request failed with HTTP $http_code"
+    	cat "$file_name"
+    	return 1
+	fi
+}
+
+
+graph_get "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices" "device_response.json" || exit 1 
+device_response=$(cat device_response.json)
+
+#Requesting Intune all device details from Microsoft Graph.
 all_devices=$(echo "$device_response" | jq -r '.value[] | [.id,.deviceName,.lastSyncDateTime] | @tsv')
+
+
 printf "\nINTUNE COMPLIANCE AUDITOR\n"
 printf "~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n"
 
-while IFS=$'\t' read -r device_id device_name last_sync
-do
+
 #Requesting summaries for all Intune compliance settings and extracting each compliance-setting summary ID.
-summary_response=$(curl -s "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries" \
-  -H "Authorization: Bearer $ACCESS_TOKEN")
-SUMMARY_IDS="$(echo "$summary_response" | jq -r '.value[].id')"
-counter=0
-ncounter=0
-
+while IFS=$'\t' read -r device_id device_name last_sync;
+do
+	graph_get "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries" "summary_response.json"
+	summary_response=$(cat summary_response.json)
+	SUMMARY_IDS="$(echo "$summary_response" | jq -r '.value[].id')"
+	counter=0
+	ncounter=0
 printf "Device: %s\n\n" "$device_name"
-
 printf "%-45s %-15s\n" "SETTINGS" "STATE"
 printf "%-45s %-15s\n" "---------------------------------------------" "---------"
 
-while read -r summary_id;do	
-	setting_response=$(curl -s "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries/$summary_id/deviceComplianceSettingStates" \
-	-H "Authorization: Bearer $ACCESS_TOKEN") 
- 	result=$(echo "$setting_response" | jq -r --arg jq_device_id "$device_id" '.value[]| select(.deviceId == $jq_device_id)| [(.settingName | split(".") | last),.state]| @tsv')
-if [[ -n "$result" ]];then
-	IFS=$'\t' read -r settings state <<< "$result"
-    	printf "%-45s %-15s\n" "$settings" "$state"
-fi
 
-#Increasing counter after Compliance Check
-if [[ "$state" == "compliant" ]]; then
-            ((counter++))
+	while read -r summary_id;
+	do	
+		graph_get "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries/$summary_id/deviceComplianceSettingStates" "setting_response.json"
+		setting_response=$(cat setting_response.json)
+ 		result=$(echo "$setting_response" | jq -r --arg jq_device_id "$device_id" '.value[]| select(.deviceId == $jq_device_id)| [(.settingName | split(".") | last),.state]| @tsv')
+		if [[ -n "$result" ]];then
+			IFS=$'\t' read -r settings state <<< "$result"
+    			printf "%-45s %-15s\n" "$settings" "$state"
+		fi
 
-        elif [[ "$state" == "nonCompliant" ]]; then
-            ((ncounter++))
-fi
+		#Increasing counter after Compliance Check
+		if [[ "$state" == "compliant" ]]; then
+            		((counter++))
 
-done <<< "$SUMMARY_IDS"
+        	elif [[ "$state" == "nonCompliant" ]]; then
+            		((ncounter++))
+		fi
+	done <<< "$SUMMARY_IDS"
 
 total=$((counter+ncounter))
 if ((total > 0)); then
@@ -78,6 +118,8 @@ else
     device_status="ACTIVE"
 fi
 
+printf '"%s","%s","%s","%s","%s","%s"\n' \
+"$device_name" "$comp_percentage" "$counter" "$ncounter" "$hours_since_sync" "$device_status" >> "$csv_file"
 
 printf "\nSUMMARY\n"
 printf "=======\n"
