@@ -91,7 +91,7 @@ chmod +x intune_audit.sh
 ./intune.audit.
 
 ## Example Output
-
+```
 INTUNE COMPLIANCE AUDITOR
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -143,6 +143,7 @@ Contents:
 "Device","CompliancePercentage","CompliantSettings","NonCompliantSettings","LastSyncHours","DeviceStatus"
 "DESKTOP-UMEJ8M1","83.3","5","1","29","ACTIVE"
 "DESKTOP-JFEK1N5","83.3","5","1","23","ACTIVE"
+```
 
 ## Security Considerations
 
