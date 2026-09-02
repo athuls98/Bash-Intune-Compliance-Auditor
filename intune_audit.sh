@@ -52,10 +52,9 @@ graph_get()
 }
 
 
+#Requesting Intune-managed device details from Microsoft Graph.
 graph_get "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices" "device_response.json" || exit 1 
 device_response=$(cat device_response.json)
-
-#Requesting Intune all device details from Microsoft Graph.
 all_devices=$(echo "$device_response" | jq -r '.value[] | [.id,.deviceName,.lastSyncDateTime] | @tsv')
 
 
@@ -63,7 +62,7 @@ printf "\nINTUNE COMPLIANCE AUDITOR\n"
 printf "~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n"
 
 
-#Requesting summaries for all Intune compliance settings and extracting each compliance-setting summary ID.
+#Requesting summaries for all Intune compliance settings.
 while IFS=$'\t' read -r device_id device_name last_sync;
 do
 	graph_get "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries" "summary_response.json"
@@ -95,6 +94,8 @@ printf "%-45s %-15s\n" "---------------------------------------------" "--------
 		fi
 	done <<< "$SUMMARY_IDS"
 
+
+#Calculating the compliance percentage
 total=$((counter+ncounter))
 if ((total > 0)); then
 	comp_percentage=$(awk -v c="$counter" -v t="$total" \
@@ -104,32 +105,33 @@ else
 fi
 
 
+#Calculating the last sync in hours and days.
 epoch=$(date -d "$last_sync" +%s)
 current_epoch_time=$(date +%s)
-
-
 seconds_since_sync=$((current_epoch_time - epoch))
 hours_since_sync=$((seconds_since_sync / 3600))
 days_since_sync=$((seconds_since_sync / 86400))
 
+
+#Device Status
 if (( days_since_sync >= 30 )); then
     device_status="INACTIVE/STALE"
 else
     device_status="ACTIVE"
 fi
 
+#Appending to csv file
 printf '"%s","%s","%s","%s","%s","%s"\n' \
 "$device_name" "$comp_percentage" "$counter" "$ncounter" "$hours_since_sync" "$device_status" >> "$csv_file"
 
 printf "\nSUMMARY\n"
 printf "=======\n"
-
 printf "Compliant settings:     %d\n" "$counter"
 printf "Non-compliant settings: %d\n" "$ncounter"
 printf "Compliance percentage:  %s%%\n" "$comp_percentage"
-
 printf "Last sync: %d hours ago (%d days)\n" \
     "$hours_since_sync" "$days_since_sync"
 printf "Device status:          %s\n" "$device_status"
 printf "\n============================================================\n\n"
+
 done <<< "$all_devices"
